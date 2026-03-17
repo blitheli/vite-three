@@ -2,18 +2,13 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './style.css'
 import { Canvas } from '@react-three/fiber';
-import Experience from './Experience';
+import StageGlb from './StageGlb.jsx';
 
 const root = createRoot(document.getElementById('root'));
 
 root.render(
   <StrictMode>
     <Canvas
-    gl={
-      {
-        antialias: true
-      }
-    }
       camera={{
         fov: 45,
         near: 0.1,
@@ -21,8 +16,7 @@ root.render(
         position: [3,2,6]
       }}
     >
-
-      <Experience /> 
+      <StageGlb /> 
 
     </Canvas>
   </StrictMode>
