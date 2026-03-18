@@ -204,10 +204,10 @@ function App() {
       }}
       camera={{
         fov: 60,
-        position: [-2e7, 0, 0],
+        position: [1e7, 0, 0],
         up: [0, 0, 1],
-        near: 1e4,
-        far: 1e9,
+        near: 5e3,
+        far: 1e8,
       }}
       frameloop="always"
     >
