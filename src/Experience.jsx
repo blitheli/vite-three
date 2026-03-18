@@ -1,40 +1,54 @@
-import {
-  OrbitControls,
-  TransformControls,
-  PivotControls,
-  Html,
-} from "@react-three/drei";
-import { useRef } from "react";
+import { OrbitControls, useGLTF, useAnimations } from "@react-three/drei";
+import { Perf } from "r3f-perf";
+import { useEffect } from "react";
+import { useControls } from "leva";
 
 export default function Experience() {
-  const cubeRef = useRef();
+
+  // 加载 Fox 模型，路径必须是 public 下的绝对路径
+  const fox = useGLTF('/models/fox.glb');
+  const animations = useAnimations(fox.animations, fox.scene);
+
+  const { animationName } = useControls({
+    animationName: {
+      options: animations.names },
+  });
+  
+  useEffect(() => {
+    if (animations.actions) {
+      // 先淡出所有动作
+      Object.values(animations.actions).forEach(action => {
+        action.fadeOut(0.5);
+      });
+  
+      // 播放新动作
+      const action = animations.actions[animationName];
+      action.reset().fadeIn(0.5).play();
+  
+      console.log(`Playing animation: ${animationName}`);
+    }
+  }, [animationName, animations.actions]);
+
   return (
     <>
+      {/* 性能监控 */}
+      <Perf position="top-left" />
       <OrbitControls makeDefault />
 
-      <directionalLight position={[1, 2, 3]} intensity={1.5} />
+      {/* 灯光 */}
+      <directionalLight castShadow position={[1, 2, 3]} intensity={1.5} />
       <ambientLight intensity={0.3} />
 
-      <mesh ref={cubeRef} position-x={-2}>
-        <boxGeometry args={[1, 1, 1]} />
-        <meshStandardMaterial color={"orange"} />
-      </mesh>
+      {/* Fox 模型渲染 */}
+      {fox && (
+        <primitive object={fox.scene} position={[0, 0, 0]} scale={0.2} />
+      )}
 
-      <TransformControls object={cubeRef} mode="rotate"></TransformControls>
-
-      <PivotControls anchor={[0, 0, 0]} depthTest={false} lineWidth={4}>
-        <mesh position={[2, 0, 0]}>
-          <sphereGeometry args={[0.5, 32, 32]} />
-          <meshStandardMaterial color={"blue"} />
-        </mesh>
-      </PivotControls>
-
-      <mesh position-y={-1} rotation-x={-Math.PI * 0.5}>
+      {/* 地面 */}
+      <mesh position-y={-0.8} rotation-x={-Math.PI * 0.5} receiveShadow>
         <planeGeometry args={[10, 10]} />
-        <meshStandardMaterial color={"green"} />
+        <meshStandardMaterial color={"greenyellow"} />
       </mesh>
-
-      <Html>heloo world</Html>
     </>
   );
 }
