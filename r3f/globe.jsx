@@ -2,26 +2,30 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { Canvas } from "@react-three/fiber";
 // TilesRenderer, controls and attribution imports
-import { TilesPlugin, TilesRenderer, TilesAttributionOverlay, EnvironmentControls } from '3d-tiles-renderer/r3f';
-import { UpdateOnChangePlugin, GLTFExtensionsPlugin, ReorientationPlugin } from '3d-tiles-renderer/plugins';
+import {
+  TilesPlugin, TilesRenderer, TilesAttributionOverlay,
+  GlobeControls, CameraTransition, CompassGizmo,
+} from '3d-tiles-renderer/r3f';
+import {
+  UpdateOnChangePlugin, GLTFExtensionsPlugin,
+  ReorientationPlugin, TileCompressionPlugin, TilesFadePlugin,
+} from '3d-tiles-renderer/plugins';
 import { CesiumIonAuthPlugin } from '3d-tiles-renderer/core/plugins';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 // R3F, DREI and LEVA imports
 import { Environment, GizmoHelper, GizmoViewport } from '@react-three/drei';
+import { Perf } from "r3f-perf";
 
 /*
-  1. 使用Cesium Ion的API Token和资产ID加载3D Tiles, 数据源: Cesium ION
-     只能加载一个城市
+  1. 使用Cesium Ion的API Token和资产ID加载3D Tiles 全球: Google Photorealistic 3D Tiles
 
 */
 //Plugins
 
 
-const dracoLoader = new DRACOLoader().setDecoderPath( 'https://www.gstatic.com/draco/v1/decoders/' );
+const dracoLoader = new DRACOLoader().setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
 
-// Aerometrex San Francisco High Resolution 3D Model with Street Level Enhanced 3D (Non-Commercial Trial)
-const assetId = 1415196; //2275207
-//const assetId = 2275207;
+const assetId = 2275207;
 const apiToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI4M2ZhYzM4My1lN2NhLTRjNTktODY1OC1jZDdmOTU3Y2ZjMGEiLCJpZCI6MTMwNTAsInNjb3BlcyI6WyJhc3IiLCJnYyJdLCJpYXQiOjE1NjI0NzA5NzB9.rRTs6chsWJdo9KNYe5VjJj2fUzMHeniIJvFQOd0aLJU";
 
 function App() {
@@ -29,24 +33,35 @@ function App() {
   //-----------------------------------------------------------------
   return (
     <Canvas
-    frameloop='demand'
-    camera={ {
-      position: [ 300, 300, 300 ],
-      near: 1,
-      far: 1e5,
-    } }
+      frameloop='always'  // 使用 Perf 监控时需要 always，调试完可改回 demand
+      camera={{
+        position: [0, 0.5 * 1e7, 1.5 * 1e7],
+        near: 1,
+        far: 1e5,
+      }}
+      flat
     >
-      <TilesRenderer key={assetId}>
+      {/* 性能监控 */}
+      <Perf position="top-left" />
+
+      {/* 加载3D Tiles 全球 */}
+      <TilesRenderer group={{ rotation: [- Math.PI / 2, 0, 0] }}>
         <TilesPlugin plugin={CesiumIonAuthPlugin} args={{ apiToken: apiToken, assetId }} />
         <TilesPlugin plugin={GLTFExtensionsPlugin} dracoLoader={dracoLoader} />
-        <TilesPlugin plugin={ReorientationPlugin} />
+        <TilesPlugin plugin={TileCompressionPlugin} />
         <TilesPlugin plugin={UpdateOnChangePlugin} />
+        <TilesPlugin plugin={TilesFadePlugin} fadeDuration={500} />
+
+        {/* Controls */}
+        <GlobeControls enableDamping={true} />
+        <CameraTransition mode={'perspective'} />
 
         <TilesAttributionOverlay />
-      </TilesRenderer>
 
-      {/* Controls */}
-      <EnvironmentControls enableDamping={true} maxDistance={5000} />
+        {/* Add compass gizmo */}
+        <CompassGizmo />
+        {/* <TilesLoadingBar /> */}
+      </TilesRenderer>
 
       {/* other r3f staging */}
       <Environment
@@ -54,11 +69,7 @@ function App() {
         backgroundBlurriness={0.9}
         environmentIntensity={1}
       />
-      <GizmoHelper alignment="bottom-right">
-        <GizmoViewport />
-      </GizmoHelper>
 
-     
     </Canvas>
 
   );
