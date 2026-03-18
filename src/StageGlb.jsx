@@ -1,4 +1,5 @@
 import { OrbitControls, Stage, useGLTF, Html } from "@react-three/drei";
+
 export default function StageGlb() {
 
   //  加载glb模型,并使用Drei的html标注进行兴趣点标注
