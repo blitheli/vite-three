@@ -1,43 +1,64 @@
-import { StrictMode, useCallback } from "react";
+import { StrictMode, useRef } from "react";
 import { createRoot } from "react-dom/client";
-import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Stage, Html, Environment } from "@react-three/drei";
-import * as THREE from "three";
+import { Canvas, useFrame } from "@react-three/fiber";
+import { Environment, GizmoHelper, GizmoViewport, MeshTransmissionMaterial } from "@react-three/drei";
 import {
   TilesRenderer, TilesPlugin, EnvironmentControls,
-  GlobeControls, TilesAttributionOverlay,
 } from "3d-tiles-renderer/r3f";
-import { DebugTilesPlugin, GoogleCloudAuthPlugin, TilesFadePlugin } from "3d-tiles-renderer/plugins";
+import { TilesFadePlugin } from "3d-tiles-renderer/plugins";
 
+/*
+  1. 独立的3D Tiles
+  2. 单独一个旋转的mesh
 
+  来源： https://github.com/NASA-AMMOS/3DTilesRendererJS/blob/master/example/r3f/basic.jsx
+  20260318  blitheli
+*/
 
-
+//  独立的3D Tiles
 const tilesetUrl = 'https://raw.githubusercontent.com/NASA-AMMOS/3DTilesSampleData/master/msl-dingo-gap/0528_0260184_to_s64o256_colorize/0528_0260184_to_s64o256_colorize/0528_0260184_to_s64o256_colorize_tileset.json';
 
-const cameraPosition = [12, 7.5, 12]; // Set the camera position so the tiles are visible
+//  单独一个旋转的mesh
+function RotatingMesh(props) {
 
-export default function App() {
-  // tile 加载后，将所有材质设为双面渲染（修复法线方向导致的面片不可见问题）
-  const handleLoadModel = useCallback((event) => {
-    event.scene.traverse((child) => {
-      if (child.isMesh) {
-        child.material.side = THREE.DoubleSide;
-      }
-    });
-  }, []);
+  const ref = useRef();
+
+  useFrame(() => {
+
+    const mesh = ref.current;
+    mesh.rotation.x = Math.sin(window.performance.now() * 0.0005) * 2;
+    mesh.rotation.y = Math.cos(window.performance.now() * 0.0015);
+
+  });
+
+  return <mesh {...props} ref={ref}>
+    <icosahedronGeometry />
+    <MeshTransmissionMaterial thickness={1.5} chromaticAberration={0.25} color={0x80DEEA} />
+  </mesh>;
+
+}
+
+function App() {
 
   return (
-    <Canvas camera={{ position: cameraPosition }}>
-
-      {/* 光源 - 3D Tiles 的 PBR 材质需要光照才能显示表面 */}
-      <ambientLight intensity={1} />
-      <directionalLight position={[1, 2, 3]} intensity={1.5} />
-
-      <group rotation-x={-Math.PI * 0.5}>
-        <TilesRenderer url={tilesetUrl} onLoadModel={handleLoadModel}>
+    <Canvas camera={{ position: [12, 7.5, 12], }}
+      style={{
+        width: '100%',
+        height: '100%',
+        position: 'absolute',
+        margin: 0,
+        left: 0,
+        top: 0,
+      }}
+    >
+      {/* 注意这里的旋转不要反了，否则旋转的mesh会反了 */}
+      <group rotation-x={Math.PI * 0.5}>
+        <TilesRenderer url={tilesetUrl}>
           {/* displayBoxBounds 仅用于调试，确认能看到表面后可关闭 */}
-          <TilesPlugin plugin={DebugTilesPlugin} displayBoxBounds={false} />
           <TilesPlugin plugin={TilesFadePlugin} fadeDuration={500} />
+
+          {/* add mesh to local frame of the tileset*/}
+          <RotatingMesh position={[0, - 4, - 4]} scale={2} />
         </TilesRenderer>
       </group>
 
@@ -45,23 +66,22 @@ export default function App() {
       <EnvironmentControls enableDamping={true} maxDistance={50} />
 
       <Environment
-        preset="sunset" 
+        preset="sunset"
         background={true}
         backgroundBlurriness={0.9}
-        backgroundIntensity={1}
+        environmentIntensity={1}
       />
 
+      <GizmoHelper alignment="bottom-right">
+        <GizmoViewport />
+      </GizmoHelper>
     </Canvas>
   );
 }
 
 // ---- 页面渲染入口（兼容 HMR 热更新）----
-const container = document.getElementById("root");
-if (!container._reactRoot) {
-  container._reactRoot = createRoot(container);
-}
-container._reactRoot.render(
+createRoot(document.getElementById('root')).render(
   <StrictMode>
     <App />
-  </StrictMode>
+  </StrictMode>,
 );
