@@ -57,9 +57,12 @@ function App() {
   );
 }
 
-// ---- 页面渲染入口 ----
-const root = createRoot(document.getElementById("root"));
-root.render(
+// ---- 页面渲染入口（兼容 HMR 热更新）----
+const container = document.getElementById("root");
+if (!container._reactRoot) {
+  container._reactRoot = createRoot(container);
+}
+container._reactRoot.render(
   <StrictMode>
     <App />
   </StrictMode>
