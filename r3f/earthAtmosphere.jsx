@@ -191,14 +191,23 @@ export default function App() {
       // 相机位置：
       camera={{ fov: 60, position: [-2e7, 0, 0], up: [0, 0, 1], near: 5e2, far: 1e8 }}
       frameloop="always"
-      // 初始化 WebGPU 渲染器
       gl={async (glProps) => {
+        // 手动申请 GPU 设备，将 maxInterStageShaderVariables 提升到 32
+        // AtmosphereLightNode 会注入额外 varying，默认上限 16 不够用
+        const adapter = await navigator.gpu.requestAdapter();
+        const device = await adapter.requestDevice({
+          requiredLimits: {
+            maxInterStageShaderVariables: Math.min(
+              adapter.limits.maxInterStageShaderVariables,
+              32
+            ),
+          },
+        });
         const renderer = new WebGPURenderer({
           canvas: glProps.canvas,
-          logarithmicDepthBuffer: true,
+          device,
         });
         await renderer.init();
-        // 将 AtmosphereLightNode 注册到渲染器的 node library
         renderer.library.addLight(AtmosphereLightNode, AtmosphereLight);
         return renderer;
       }}
