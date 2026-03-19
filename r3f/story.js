@@ -175,11 +175,11 @@ const Content: FC<StoryProps> = () => {
   )
 }
 
+//本质是：用多张纹理和 TSL 节点，在材质里做颜色、发光、粗糙度的混合和映射，实现地球效果。
 const blueMarble = ({
   cloudAlbedo = 0.95,
-  oceanRoughness = 0.4,
-  oceanIOR = 1.33,
-  emissiveColor = vec3(1, 0.6, 0.5).mul(0.002)
+  oceanRoughness = 0.4, //海洋粗糙度,这里默认为光滑度最低值  oceanIOR = 1.33,
+  emissiveColor = vec3(1, 0.6, 0.5).mul(0.002)  //  发光颜色(发光强度)
 } = {}): MeshPhysicalNodeMaterialParameters => {
   const color = new TextureLoader().load('public/blue_marble/color.webp')
   const ocean = new TextureLoader().load('public/blue_marble/ocean.webp')
@@ -190,11 +190,18 @@ const blueMarble = ({
   clouds.anisotropy = 16
   emissive.anisotropy = 16
 
+  // 海洋区域且无云, 是海洋且无云”的地方为 1，其它地方为 0
   const oceanSubClouds = mul(texture(ocean).r, texture(clouds).r.oneMinus())
   return {
+    // mix(底色, 云色, 云量)：云量越大，越接近云色
     colorNode: mix(texture(color).rgb, vec3(cloudAlbedo), texture(clouds).r),
+    // 自发光：城市灯光等发光遮罩* 发光颜色(发光强度) 
     emissiveNode: texture(emissive).r.mul(emissiveColor),
+    // 粗糙度：输入 1 → 输出 oceanRoughness（海洋较光滑）
+    // 输入 0 → 输出 1（陆地/云更粗糙）
     roughnessNode: oceanSubClouds.remap(1, 0, oceanRoughness, 1),
+    // 这里把海洋的 IOR 设为 1.33（水的折射率），用来模拟海面的折射和菲涅尔效果，让海洋看起来更像真实水面。
+    // 默认把整个地球都设为 1.33，？？
     ior: oceanIOR
   }
 }
