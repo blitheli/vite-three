@@ -1,18 +1,38 @@
-import { StrictMode, useMemo } from "react";
+import { StrictMode, useMemo, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import { Canvas, extend } from "@react-three/fiber";
-import { OrbitControls, Environment, Stats } from "@react-three/drei";
-import { TextureLoader } from "three";
-import { time, mix, mul, texture, vec3 } from "three/tsl";
-import { MeshPhysicalNodeMaterial, WebGPURenderer } from "three/webgpu";
+import { Canvas, extend, useThree, useFrame } from "@react-three/fiber";
+import { OrbitControls, Stats } from "@react-three/drei";
+import { AgXToneMapping, TextureLoader } from "three";
+import { mix, mul, texture, vec3, pass, mrt, output, uniform, toneMapping, } from "three/tsl";
+import { MeshPhysicalNodeMaterial, WebGPURenderer, RenderPipeline } from "three/webgpu";
+import { lensFlare, temporalAntialias, dithering, highpVelocity } from "@takram/three-geospatial/webgpu";
+import {
+  getECIToECEFRotationMatrix,
+  getMoonDirectionECI,
+  getSunDirectionECI,
+  getSunDirectionECEF,
+  getMoonDirectionECEF,
+} from '@takram/three-atmosphere'
+import {
+  aerialPerspective,
+  AtmosphereContextNode,
+  AtmosphereLight,
+  AtmosphereLightNode
+} from '@takram/three-atmosphere/webgpu'
+import { Ellipsoid } from '@takram/three-geospatial'
+import { EllipsoidMesh } from '@takram/three-geospatial/r3f'
+
 
 extend({ MeshPhysicalNodeMaterial });
+extend({ AtmosphereLight });
 
 /*
   使用webgpu渲染地球模型(sphereGeometry+blueMarble材质),实现地球效果: 云层、海洋、城市灯光、自发光等。
 
   20260319  blitheli
 */
+const atmosphereContext = new AtmosphereContextNode();
+
 
 // 加载地球纹理, 返回材质对象: MeshPhysicalNodeMaterialParameters
 //本质是：用多张纹理和 TSL 节点，在材质里做颜色、发光、粗糙度的混合和映射，实现地球效果。
@@ -49,50 +69,145 @@ const blueMarble = ({
 };
 
 // 地球模型,使用WebGPUObject组件渲染
-function WebGPUObject() {
+function Content() {
+
+  console.log("重新渲染地球");
+
+  // 获取相机, 接收一个选择器函数（selector），R3F 会把包含整个场景状态的 state 对象传给它：
+  // state 里大概长这样：camera,  当前活跃相机  scene, Three.js Scene  gl, WebGPU/WebGL 渲染器
+  //选择器 ({ camera }) => camera 从 state 中解构出 camera 并返回，所以最终 const camera 拿到的就是当前的 Three.js 相机对象。  
+  const gl = useThree(({ gl }) => gl);
+  const scene = useThree(({ scene }) => scene);
+  const camera = useThree(({ camera }) => camera);
+
+  // 将 camera 同步到 atmosphereContext（大气光照需要相机位置做透射率计算）
+  // 只有 camera 变化时，才同步到 atmosphereContext
+  useEffect(() => {
+    atmosphereContext.camera = camera;
+  }, [camera]);
+
+  //-------------------------------------------------------------------------------------
+  // 初始化太阳/月亮方向（基于当前系统时间）
+  // 只有第一次渲染时，才初始化太阳/月亮方向
+  //  后续要实时变化时间，实现动态效果
+  useEffect(() => {
+    const date = new Date();
+    // 获取大气上下文对象的属性(直接取出属性值)
+    const { matrixECIToECEF, sunDirectionECEF, moonDirectionECEF } = atmosphereContext;
+
+    getSunDirectionECEF(date, sunDirectionECEF.value);
+    getMoonDirectionECEF(date, moonDirectionECEF.value);
+    // 
+    //getECIToECEFRotationMatrix(date, matrixECIToECEF.value);
+    //getSunDirectionECI(date, sunDirectionECEF.value).applyMatrix4(matrixECIToECEF.value);
+    //getMoonDirectionECI(date, moonDirectionECEF.value).applyMatrix4(matrixECIToECEF.value);
+  }, []);
+
+  // ---- WebGPU 后处理管线 -------------------------------------------------------------
+  
+  // 1. 主渲染 pass（启用 MRT：颜色 + 高精度速度缓冲）
+  // pass为WebGPU 后处理管线的节点函数，全称 Pass Node，本质是一个渲染通道节点。
+  // 它把 scene + camera 的渲染结果捕获到 GPU 纹理缓冲区中，而不是直接输出到屏幕。之后可以从这个缓冲区里取出各种数据：
+  const passNode = useMemo(
+    () =>
+      pass(scene, camera, { samples: 0 }).setMRT(
+        mrt({ output, velocity: highpVelocity })
+      ),
+    [scene, camera]
+  );
+
+  const colorNode = passNode.getTextureNode("output");
+  const depthNode = passNode.getTextureNode("depth");
+  const velocityNode = passNode.getTextureNode("velocity");
+
+  // 2. 空气透视 (Aerial Perspective)
+  const aerialNode = useMemo(
+    () => aerialPerspective(atmosphereContext, colorNode, depthNode),
+    [atmosphereContext, colorNode, depthNode]
+  );
+
+  // 3. 镜头光晕 (Lens Flare)
+  const lensFlareNode = useMemo(
+    () => lensFlare(aerialNode),
+    [aerialNode]
+  );
+
+  // 4. 色调映射 (AgX Tone Mapping, 曝光度 = 2)
+  // story.js 原版通过 useToneMappingControls 交互调节，这里固定为 2
+  const toneMappingNode = useMemo(
+    () => toneMapping(AgXToneMapping, uniform(2), lensFlareNode),
+    [lensFlareNode]
+  );
+
+  // 5. 时域抗锯齿 (Temporal Anti-Aliasing)
+  const taaNode = useMemo(
+    () =>
+      temporalAntialias(highpVelocity)(
+        toneMappingNode,
+        depthNode,
+        velocityNode,
+        camera
+      ),
+    [camera, depthNode, velocityNode, toneMappingNode]
+  );
+
+  // 6. 最终后处理（附加 Dithering 去色带）
+  const renderPipeline = useMemo(
+    () => new RenderPipeline(gl, taaNode.add(dithering)),
+    [gl, taaNode]
+  );
+
+  // 渲染循环 —— 优先级 1 接管 R3F 默认渲染，由 RenderPipeline 全权负责绘制
+  useFrame(() => {
+    renderPipeline.render();
+  }, 1);
+
+  //-------------------------------------------------------------------------------------
   // 地球材质,使用useMemo缓存,避免重复创建材质对象
-  const material = useMemo(
+  const earthMaterial = useMemo(
     () => new MeshPhysicalNodeMaterial(blueMarble()),
     [],
   );
 
   return (
-    // 使用缓存的材质对象
-    <mesh material={material}>
-      {/* 球体几何体,参数: 半径,经度分段数,纬度分段数 */}
-      <sphereGeometry args={[1, 360, 180]} />
-    </mesh>
+    <>
+      {/* 大气光照：根据大气透射率自动计算太阳颜色 */}
+      <atmosphereLight args={[atmosphereContext]} />
+
+      {/* 地球模型 */}
+      <EllipsoidMesh
+        args={[Ellipsoid.WGS84.radii, 360, 180]}
+        material={earthMaterial}
+      />
+
+      {/* 相机限制在地球表面以外 */}
+      <OrbitControls minDistance={1.2e6} enablePan={false} />
+    </>    
   );
 }
 
 export default function App() {
   return (
     <Canvas
-      shadows
-      camera={{ position: [0, 0, 5], fov: 45 }}
+      // 相机位置：
+      camera={{ fov: 60, position: [-2e7, 0, 0], up: [0, 0, 1], near: 5e2, far: 1e8 }}
+      frameloop="always"
       // 初始化 WebGPU 渲染器
       gl={async (glProps) => {
-        // 创建 WebGPU 渲染器
-        const renderer = new WebGPURenderer(glProps);
-        // 初始化渲染器
+        const renderer = new WebGPURenderer({
+          canvas: glProps.canvas,
+          logarithmicDepthBuffer: true,
+        });
         await renderer.init();
-        // 返回渲染器
+        // 将 AtmosphereLightNode 注册到渲染器的 node library
+        renderer.library.addLight(AtmosphereLightNode, AtmosphereLight);
         return renderer;
       }}
     >
-      {/* 背景颜色 */}
-      <color attach="background" args={["black"]} />
-
-      {/* 平行光: 方向光,用于模拟太阳,参数: 位置,强度 */}
-      <directionalLight position={[10, 0, 10]} intensity={2} />
-
-      {/* 地球模型 */}
-      <WebGPUObject />
+      <Content/>
 
       {/* 性能监控 */}
       <Stats />
-      {/* 轨道控制器 */}
-      <OrbitControls />
     </Canvas>
   );
 }
