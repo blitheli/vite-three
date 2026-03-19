@@ -31,7 +31,6 @@ extend({ AtmosphereLight });
 
   20260319  blitheli
 */
-const atmosphereContext = new AtmosphereContextNode();
 
 
 // 加载地球纹理, 返回材质对象: MeshPhysicalNodeMaterialParameters
@@ -79,12 +78,12 @@ function Content() {
   const gl = useThree(({ gl }) => gl);
   const scene = useThree(({ scene }) => scene);
   const camera = useThree(({ camera }) => camera);
+  
 
+  // 大气上下文对象,使用useMemo缓存,避免重复创建大气上下文对象
+  const atmosphereContext = useMemo(() => new AtmosphereContextNode(), []);
   // 将 camera 同步到 atmosphereContext（大气光照需要相机位置做透射率计算）
-  // 只有 camera 变化时，才同步到 atmosphereContext
-  useEffect(() => {
-    atmosphereContext.camera = camera;
-  }, [camera]);
+  atmosphereContext.camera = camera;
 
   //-------------------------------------------------------------------------------------
   // 初始化太阳/月亮方向（基于当前系统时间）
