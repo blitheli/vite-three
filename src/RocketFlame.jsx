@@ -1,7 +1,8 @@
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
+import { folder, useControls } from 'leva'
 
 // 火箭发动机喷射尾焰：vUv.y = 0 表示喷管出口，vUv.y = 1 表示远端
 const exhaustVertexShader = /* glsl */ `
@@ -19,6 +20,7 @@ const exhaustFragmentShader = /* glsl */ `
   uniform vec3  uSmokeColor;
   uniform vec3  uFarSmokeColor;
   uniform float uIntensity;
+  uniform float uTurbulence;
 
   varying vec2 vUv;
 
@@ -52,33 +54,40 @@ const exhaustFragmentShader = /* glsl */ `
     float along = vUv.y;
     float lateral = vUv.x - 0.5;
 
-    // 烟羽随距离喷管增大而横向扩散（圆锥形，但比之前窄）
-    float spread = 0.40 + along * 0.40;
+    // 烟羽随距离喷管增大而横向扩散（圆锥形）
+    float spread = 0.38 + along * (0.50 + uTurbulence * 0.20);
 
-    // 沿喷射方向滚动的湍流（噪声向下流动）
-    float turb = fbm(vec2(lateral * 7.0, along * 4.0 - uTime * 5.5));
+    // 多层湍流（不同尺度）
+    float turb  = fbm(vec2(lateral * 7.0, along * 4.0 - uTime * 5.5));
     float turb2 = fbm(vec2(lateral * 3.0 + 17.3, along * 1.8 - uTime * 2.2));
+    float turb3 = fbm(vec2(lateral * 11.0 - 5.0, along * 7.0 - uTime * 3.5));
 
-    // 横向扰动幅度从喷管开始逐渐增加
-    float wobble = (turb - 0.5) * 0.22 * smoothstep(0.0, 0.55, along);
+    // 蛇形横向摆动，受 uTurbulence 控制
+    float wobble = (turb - 0.5) * 0.40 * uTurbulence * smoothstep(0.0, 0.55, along);
 
     // 与中心轴的归一化距离（带湍流扰动）
     float dist = abs(lateral / spread + wobble) * 2.0;
 
+    // 沿喷射方向的明暗波纹（马赫盘 / 涡环）
+    float rings = sin(along * 14.0 - uTime * 3.5 + turb2 * 5.0) * 0.5 + 0.5;
+    rings = mix(0.65, 1.05, rings);
+
     // 高温核心：靠近中心 & 靠近出口最亮（窄而极亮）
-    float core = smoothstep(0.60, 0.0, dist)
-               * smoothstep(0.35, 0.0, along);
+    float core = smoothstep(0.55, 0.0, dist)
+               * smoothstep(0.32, 0.0, along);
 
-    // 火焰段：占主导的橙红喷射柱（覆盖前 70%）
+    // 火焰段：叠加涡环明暗带，呈现马赫盘效果
     float flame = smoothstep(1.0, 0.05, dist)
-                * smoothstep(0.70, 0.02, along)
-                * (1.0 + turb2 * 0.35);
+                * smoothstep(0.65, 0.02, along)
+                * (1.0 + turb2 * 0.40 * uTurbulence)
+                * rings;
 
-    // 烟羽：远段细丝状烟
-    float plume = smoothstep(1.0, 0.05, dist)
-                * smoothstep(0.35, 0.55, along)
-                * (1.0 - smoothstep(0.70, 0.98, along))
-                * (0.6 + turb * 0.5);
+    // 烟羽边缘被高频湍流打散（羽毛感）
+    float plumeDist = dist - turb3 * 0.45 * uTurbulence * smoothstep(0.20, 0.75, along);
+    float plume = smoothstep(1.0, 0.05, plumeDist)
+                * smoothstep(0.32, 0.55, along)
+                * (1.0 - smoothstep(0.72, 1.0, along))
+                * (0.55 + turb * 0.6 * uTurbulence);
 
     // 远端逐渐消散
     float farFade = 1.0 - smoothstep(0.78, 1.0, along);
@@ -108,6 +117,7 @@ function ExhaustPlume({
   width = 0.16,
   length = 3.0,
   intensity = 1.0,
+  turbulence = 1.5,
   coreColor = '#fff0c8',
   flameColor = '#ff5a18',
   smokeColor = '#c89488',
@@ -115,16 +125,18 @@ function ExhaustPlume({
 }) {
   const matRef = useRef()
 
+  // 仅创建一次：所有运行时修改通过 ref / uniforms 完成
   const uniforms = useMemo(
     () => ({
       uTime: { value: 0 },
-      uCoreColor: { value: new THREE.Color(coreColor) },
-      uFlameColor: { value: new THREE.Color(flameColor) },
-      uSmokeColor: { value: new THREE.Color(smokeColor) },
-      uFarSmokeColor: { value: new THREE.Color(farSmokeColor) },
-      uIntensity: { value: intensity },
+      uCoreColor: { value: new THREE.Color() },
+      uFlameColor: { value: new THREE.Color() },
+      uSmokeColor: { value: new THREE.Color() },
+      uFarSmokeColor: { value: new THREE.Color() },
+      uIntensity: { value: 1 },
+      uTurbulence: { value: 1 },
     }),
-    [coreColor, flameColor, smokeColor, farSmokeColor, intensity],
+    [],
   )
 
   useFrame(({ clock }) => {
@@ -133,15 +145,27 @@ function ExhaustPlume({
     }
   })
 
-  // 让 vUv.y = 0 在 mesh 顶部（喷管出口），vUv.y = 1 在底部（远端）
-  // 通过把 plane 整体下移 length/2，并用 rotation 让 UV.y 反向
-  // PlaneGeometry 默认 UV：左下(0,0) 到右上(1,1)。我们想让 y=0 在“顶部”
-  // 因此把 mesh 围绕 X 轴翻转 180°（rotation-x = PI），同时整体向下偏移 length/2
+  // 把 leva 控件 / props 同步到 uniforms（两个 mesh 共用同一个 uniforms 对象）
+  useEffect(() => {
+    if (!matRef.current) return
+    const u = matRef.current.uniforms
+    u.uIntensity.value = intensity
+    u.uTurbulence.value = turbulence
+    u.uCoreColor.value.set(coreColor)
+    u.uFlameColor.value.set(flameColor)
+    u.uSmokeColor.value.set(smokeColor)
+    u.uFarSmokeColor.value.set(farSmokeColor)
+  }, [intensity, turbulence, coreColor, flameColor, smokeColor, farSmokeColor])
+
+  // PlaneGeometry 用基准 1×1，再用 mesh.scale 控制长度/宽度，避免重建几何
+  // 用 rotation-x = PI 让 vUv.y = 0 出现在 mesh 顶部（喷管出口）
+  const halfLen = length / 2
+
   return (
     <group position={position}>
       {/* 十字双 plane，使任何视角都能看见柱体 */}
-      <mesh position={[0, -length / 2, 0]} rotation={[Math.PI, 0, 0]}>
-        <planeGeometry args={[width * 2, length, 1, 48]} />
+      <mesh position={[0, -halfLen, 0]} rotation={[Math.PI, 0, 0]} scale={[width * 2, length, 1]}>
+        <planeGeometry args={[1, 1, 1, 48]} />
         <shaderMaterial
           ref={matRef}
           uniforms={uniforms}
@@ -153,8 +177,8 @@ function ExhaustPlume({
           side={THREE.DoubleSide}
         />
       </mesh>
-      <mesh position={[0, -length / 2, 0]} rotation={[Math.PI, Math.PI / 2, 0]}>
-        <planeGeometry args={[width * 2, length, 1, 48]} />
+      <mesh position={[0, -halfLen, 0]} rotation={[Math.PI, Math.PI / 2, 0]} scale={[width * 2, length, 1]}>
+        <planeGeometry args={[1, 1, 1, 48]} />
         <shaderMaterial
           uniforms={uniforms}
           vertexShader={exhaustVertexShader}
@@ -300,6 +324,35 @@ export default function RocketFlame() {
     Math.sin(angle) * boosterRadius,
   ])
 
+  // leva 控制面板：火焰形态 + 颜色
+  const {
+    flameLength: length,
+    flameWidth: width,
+    flameTurbulence: turbulence,
+    flameIntensity: intensity,
+    flameCore: coreColor,
+    flameMid: flameColor,
+    smokeNear: smokeColor,
+    smokeFar: farSmokeColor,
+  } =     useControls('尾焰参数', {
+      形态: folder({
+        flameLength: { value: 3.2, min: 1.0, max: 6.0, step: 0.1, label: '火焰长度' },
+        flameWidth: { value: 0.14, min: 0.04, max: 0.4, step: 0.01, label: '火焰宽度' },
+        flameTurbulence: { value: 1.4, min: 0, max: 3, step: 0.05, label: '扰动大小' },
+        flameIntensity: { value: 1.0, min: 0.2, max: 2.0, step: 0.05, label: '亮度' },
+      }),
+      颜色: folder({
+        flameCore: { value: '#ffe6a8', label: '高温核心' },
+        flameMid: { value: '#ff6a22', label: '火焰' },
+        smokeNear: { value: '#dba090', label: '近端烟羽' },
+        smokeFar: { value: '#9c8d86', label: '远端烟羽' },
+      }),
+    })
+
+  // 助推器尾焰相对中央喷管的尺寸比例
+  const boosterWidth = width * 0.85
+  const boosterLength = length * 1.13
+
   return (
     <>
       {/* 蓝天背景，更接近真实发射照片 */}
@@ -325,9 +378,14 @@ export default function RocketFlame() {
           <ExhaustPlume
             key={`core-${position.join(',')}`}
             position={position}
-            width={0.13}
-            length={3.0}
-            intensity={1.0}
+            width={width}
+            length={length}
+            intensity={intensity}
+            turbulence={turbulence}
+            coreColor={coreColor}
+            flameColor={flameColor}
+            smokeColor={smokeColor}
+            farSmokeColor={farSmokeColor}
           />
         ))}
 
@@ -336,9 +394,14 @@ export default function RocketFlame() {
           <ExhaustPlume
             key={`booster-${position.join(',')}`}
             position={position}
-            width={0.11}
-            length={3.4}
-            intensity={1.0}
+            width={boosterWidth}
+            length={boosterLength}
+            intensity={intensity}
+            turbulence={turbulence}
+            coreColor={coreColor}
+            flameColor={flameColor}
+            smokeColor={smokeColor}
+            farSmokeColor={farSmokeColor}
           />
         ))}
       </group>
