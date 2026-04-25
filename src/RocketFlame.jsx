@@ -21,6 +21,8 @@ const exhaustFragmentShader = /* glsl */ `
   uniform vec3  uFarSmokeColor;
   uniform float uIntensity;
   uniform float uTurbulence;
+  uniform float uRingCount;
+  uniform float uRingContrast;
 
   varying vec2 vUv;
 
@@ -68,19 +70,29 @@ const exhaustFragmentShader = /* glsl */ `
     // 与中心轴的归一化距离（带湍流扰动）
     float dist = abs(lateral / spread + wobble) * 2.0;
 
-    // 沿喷射方向的明暗波纹（马赫盘 / 涡环）
-    float rings = sin(along * 14.0 - uTime * 3.5 + turb2 * 5.0) * 0.5 + 0.5;
-    rings = mix(0.65, 1.05, rings);
+    // 沿喷射方向的明暗波纹（马赫盘 / 涡环）：
+    // 不依赖 uTime → 环完全静止；
+    // uRingCount = 1/2/3 表示火焰段内分布的亮盘个数
+    // 把 ringZone 归一化到 [0, 1] 内，N 个完整 sin 周期 = N 个亮带
+    float ringZone = clamp((along - 0.08) / 0.40, 0.0, 1.0);
+    float ringPhase = ringZone * uRingCount * 6.2831853
+                    + sin(lateral * 11.0 + 7.3) * 0.45;
+    float ringRaw = sin(ringPhase);
+    // 锐化：只保留 sin 峰值附近的一小段，让亮盘更小、更薄
+    float rings = smoothstep(0.72, 0.96, ringRaw);
+    // 火焰段边缘软化，避免硬切
+    float ringMask = smoothstep(0.55, 0.42, along) * smoothstep(0.08, 0.16, along);
+    // 当环数量为 0 时整体禁用
+    ringMask *= smoothstep(0.0, 0.5, uRingCount);
 
     // 高温核心：靠近中心 & 靠近出口最亮（窄而极亮）
     float core = smoothstep(0.55, 0.0, dist)
                * smoothstep(0.32, 0.0, along);
 
-    // 火焰段：叠加涡环明暗带，呈现马赫盘效果
+    // 火焰段：减弱横向湍流，让纵向 ring 调制更显眼
     float flame = smoothstep(1.0, 0.05, dist)
                 * smoothstep(0.65, 0.02, along)
-                * (1.0 + turb2 * 0.40 * uTurbulence)
-                * rings;
+                * (1.0 + turb2 * 0.25 * uTurbulence);
 
     // 烟羽边缘被高频湍流打散（羽毛感）
     float plumeDist = dist - turb3 * 0.45 * uTurbulence * smoothstep(0.20, 0.75, along);
@@ -99,12 +111,19 @@ const exhaustFragmentShader = /* glsl */ `
     vec3 color = smokeAt;
     color = mix(color, uFlameColor, clamp(flame, 0.0, 1.0));
     color = mix(color, uCoreColor, clamp(core, 0.0, 1.0));
+    // 马赫盘应该出现在喷流内部，而不是铺满整束火焰宽度。
+    // dist 越接近 0 越靠近喷流中心轴；这里把亮盘限制在中心区域。
+    float ringRadialMask = smoothstep(0.62, 0.18, dist);
+    float ringBoost = rings * ringMask * ringRadialMask * uRingContrast;
+    color = mix(color, uCoreColor, ringBoost * 0.45);
 
-    // alpha 取多个分量的最大值；烟羽权重大幅降低，避免过饱和
+    // alpha 取多个分量的最大值
     float alpha = 0.0;
     alpha = max(alpha, core  * 1.50);
     alpha = max(alpha, flame * 1.15);
     alpha = max(alpha, plume * 0.22);
+    // 亮盘叠加：只提亮内部核心，避免高强度时变成整块白斑
+    alpha *= 1.0 + ringBoost * 0.35;
     alpha *= farFade * uIntensity;
 
     if (alpha < 0.01) discard;
@@ -118,6 +137,8 @@ function ExhaustPlume({
   length = 3.0,
   intensity = 1.0,
   turbulence = 1.5,
+  ringCount = 1,
+  ringContrast = 1.0,
   coreColor = '#fff0c8',
   flameColor = '#ff5a18',
   smokeColor = '#c89488',
@@ -135,6 +156,8 @@ function ExhaustPlume({
       uFarSmokeColor: { value: new THREE.Color() },
       uIntensity: { value: 1 },
       uTurbulence: { value: 1 },
+      uRingCount: { value: 1 },
+      uRingContrast: { value: 1 },
     }),
     [],
   )
@@ -151,11 +174,13 @@ function ExhaustPlume({
     const u = matRef.current.uniforms
     u.uIntensity.value = intensity
     u.uTurbulence.value = turbulence
+    u.uRingCount.value = ringCount
+    u.uRingContrast.value = ringContrast
     u.uCoreColor.value.set(coreColor)
     u.uFlameColor.value.set(flameColor)
     u.uSmokeColor.value.set(smokeColor)
     u.uFarSmokeColor.value.set(farSmokeColor)
-  }, [intensity, turbulence, coreColor, flameColor, smokeColor, farSmokeColor])
+  }, [intensity, turbulence, ringCount, ringContrast, coreColor, flameColor, smokeColor, farSmokeColor])
 
   // PlaneGeometry 用基准 1×1，再用 mesh.scale 控制长度/宽度，避免重建几何
   // 用 rotation-x = PI 让 vUv.y = 0 出现在 mesh 顶部（喷管出口）
@@ -324,30 +349,36 @@ export default function RocketFlame() {
     Math.sin(angle) * boosterRadius,
   ])
 
-  // leva 控制面板：火焰形态 + 颜色
+  // leva 控制面板：火焰形态 + 马赫环 + 颜色
   const {
     flameLength: length,
     flameWidth: width,
     flameTurbulence: turbulence,
     flameIntensity: intensity,
+    machRingCount: ringCount,
+    machRingContrast: ringContrast,
     flameCore: coreColor,
     flameMid: flameColor,
     smokeNear: smokeColor,
     smokeFar: farSmokeColor,
-  } =     useControls('尾焰参数', {
-      形态: folder({
-        flameLength: { value: 3.2, min: 1.0, max: 6.0, step: 0.1, label: '火焰长度' },
-        flameWidth: { value: 0.14, min: 0.04, max: 0.4, step: 0.01, label: '火焰宽度' },
-        flameTurbulence: { value: 1.4, min: 0, max: 3, step: 0.05, label: '扰动大小' },
-        flameIntensity: { value: 1.0, min: 0.2, max: 2.0, step: 0.05, label: '亮度' },
-      }),
-      颜色: folder({
-        flameCore: { value: '#ffe6a8', label: '高温核心' },
-        flameMid: { value: '#ff6a22', label: '火焰' },
-        smokeNear: { value: '#dba090', label: '近端烟羽' },
-        smokeFar: { value: '#9c8d86', label: '远端烟羽' },
-      }),
-    })
+  } = useControls('尾焰参数', {
+    形态: folder({
+      flameLength: { value: 3.2, min: 1.0, max: 6.0, step: 0.1, label: '火焰长度' },
+      flameWidth: { value: 0.25, min: 0.04, max: 0.4, step: 0.01, label: '火焰宽度' },
+      flameTurbulence: { value: 1.4, min: 0, max: 3, step: 0.05, label: '扰动大小' },
+      flameIntensity: { value: 1.0, min: 0.2, max: 2.0, step: 0.05, label: '亮度' },
+    }),
+    马赫环: folder({
+      machRingCount: { value: 2, min: 0, max: 3, step: 1, label: '环数量' },
+      machRingContrast: { value: 0.25, min: 0, max: 1.2, step: 0.05, label: '环强度' },
+    }),
+    颜色: folder({
+      flameCore: { value: '#ffe6a8', label: '高温核心' },
+      flameMid: { value: '#ff6a22', label: '火焰' },
+      smokeNear: { value: '#dba090', label: '近端烟羽' },
+      smokeFar: { value: '#9c8d86', label: '远端烟羽' },
+    }),
+  })
 
   // 助推器尾焰相对中央喷管的尺寸比例
   const boosterWidth = width * 0.85
@@ -382,6 +413,8 @@ export default function RocketFlame() {
             length={length}
             intensity={intensity}
             turbulence={turbulence}
+            ringCount={ringCount}
+            ringContrast={ringContrast}
             coreColor={coreColor}
             flameColor={flameColor}
             smokeColor={smokeColor}
@@ -398,6 +431,8 @@ export default function RocketFlame() {
             length={boosterLength}
             intensity={intensity}
             turbulence={turbulence}
+            ringCount={ringCount}
+            ringContrast={ringContrast}
             coreColor={coreColor}
             flameColor={flameColor}
             smokeColor={smokeColor}
