@@ -115,33 +115,35 @@ const flameFragmentShader = /* glsl */ `
 function FlamePlume({ position, scale = 1, rotationZ = 0 }) {
   const materialRef = useRef()
 
-  const material = useMemo(
-    () =>
-      new THREE.ShaderMaterial({
-        uniforms: {
-          uTime: { value: 0 },
-          uCoreColor: { value: new THREE.Color('#fff2b0') },
-          uOuterColor: { value: new THREE.Color('#ff6a24') },
-          uSmokeColor: { value: new THREE.Color('#b06cff') },
-        },
-        vertexShader: flameVertexShader,
-        fragmentShader: flameFragmentShader,
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        side: THREE.DoubleSide,
-      }),
+  const uniforms = useMemo(
+    () => ({
+      uTime: { value: 0 },
+      uCoreColor: { value: new THREE.Color('#fff2b0') },
+      uOuterColor: { value: new THREE.Color('#ff6a24') },
+      uSmokeColor: { value: new THREE.Color('#b06cff') },
+    }),
     [],
   )
 
-  useFrame((_, delta) => {
-    material.uniforms.uTime.value += delta
+  useFrame(({ clock }) => {
+    if (materialRef.current) {
+      materialRef.current.uniforms.uTime.value = clock.elapsedTime
+    }
   })
 
   return (
     <mesh position={position} scale={[scale, scale, scale]} rotation={[0, 0, rotationZ]}>
       <coneGeometry args={[0.2, 1.35, 48, 28, true]} />
-      <primitive ref={materialRef} object={material} attach="material" />
+      <shaderMaterial
+        ref={materialRef}
+        uniforms={uniforms}
+        vertexShader={flameVertexShader}
+        fragmentShader={flameFragmentShader}
+        transparent
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        side={THREE.DoubleSide}
+      />
     </mesh>
   )
 }
