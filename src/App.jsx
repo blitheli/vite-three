@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import StageGlb from './StageGlb.jsx'
+import RocketFlame from './RocketFlame.jsx'
 
 // 新增测试项目时，在这里追加 { id, name, description, component } 即可。
 const projects = [
@@ -12,24 +13,11 @@ const projects = [
   },
   {
     id: 'rocketFlame',
-    name: 'rocketFlame',
-    description: '火箭尾焰测试页面，内容暂时为空。',
-    component: RocketFlamePage,
+    name: '火箭尾焰 Shader',
+    description: '使用自定义着色器模拟发动机喷焰、湍流与高温核心。',
+    component: RocketFlame,
   },
 ]
-
-function RocketFlamePage() {
-  return (
-    <>
-      <ambientLight intensity={0.6} />
-      <directionalLight position={[2, 3, 4]} intensity={1.2} />
-      <mesh rotation={[0.4, 0.6, 0]}>
-        <boxGeometry args={[1, 1, 1]} />
-        <meshStandardMaterial color="#ff8a2a" />
-      </mesh>
-    </>
-  )
-}
 
 function EmptyProject() {
   return (
